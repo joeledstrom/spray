@@ -17,10 +17,11 @@
 package spray.io
 
 import language.experimental.macros
-import scala.reflect.macros.{Context => MacroContext}
-import akka.actor.{ActorRef, ActorContext}
+import java.net.InetSocketAddress
+import scala.reflect.macros.{ Context ⇒ MacroContext }
+import akka.actor.ActorContext
 import akka.event.LoggingAdapter
-
+import akka.io.Tcp
 
 //# pipelines
 trait Pipelines {
@@ -38,32 +39,34 @@ object Pipelines {
   }
 }
 
-object Pipeline {
-  val Uninitialized: Pipeline[Any] = _ => throw new RuntimeException("Pipeline not yet initialized")
-}
-
 trait PipelineContext {
-  def connection: Connection
-  def connectionActorContext: ActorContext
+  def actorContext: ActorContext
+  def remoteAddress: InetSocketAddress
+  def localAddress: InetSocketAddress
   def log: LoggingAdapter
-  def self: ActorRef = connectionActorContext.self
-  def sender: ActorRef = connectionActorContext.sender
 }
 
-class DefaultPipelineContext(val connection: Connection,
-                             val connectionActorContext: ActorContext,
-                             val log: LoggingAdapter) extends PipelineContext
+object PipelineContext {
+  def apply(_actorContext: ActorContext, _remoteAddress: InetSocketAddress, _localAddress: InetSocketAddress,
+            _log: LoggingAdapter): PipelineContext = new PipelineContext {
+    def actorContext: ActorContext = _actorContext
+    def remoteAddress: InetSocketAddress = _remoteAddress
+    def localAddress: InetSocketAddress = _localAddress
+    def log: LoggingAdapter = _log
+  }
+  implicit def pipelineContext2ActorContext(plc: PipelineContext): ActorContext = plc.actorContext
+}
 
-trait PipelineStage { left =>
-  type CPL = Pipeline[Command]  // alias for brevity
-  type EPL = Pipeline[Event]    // alias for brevity
+trait RawPipelineStage[-C <: PipelineContext] { left =>
+  type CPL = Pipeline[Command] // alias for brevity
+  type EPL = Pipeline[Event] // alias for brevity
 
-  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines
+  def apply(context: C, commandPL: CPL, eventPL: EPL): Pipelines
 
-  def >> (right: PipelineStage): PipelineStage =
-    if (right == EmptyPipelineStage) this
-    else new PipelineStage {
-      def apply(ctx: PipelineContext, cpl: CPL, epl: EPL) = {
+  def >> [CC <: PipelineContext, R <: C with CC](right: RawPipelineStage[CC]): RawPipelineStage[R] =
+    if (right eq EmptyPipelineStage) this
+    else new RawPipelineStage[R] {
+      def apply(ctx: R, cpl: CPL, epl: EPL) = {
         var cplProxy: CPL = Pipeline.Uninitialized
         var eplProxy: EPL = Pipeline.Uninitialized
         val cplProxyPoint: CPL = cplProxy(_)
@@ -79,30 +82,30 @@ trait PipelineStage { left =>
       }
     }
 
-  def ? (condition: Boolean): PipelineStage = macro PipelineStage.enabled
+  def ?(condition: Boolean): RawPipelineStage[C] = macro RawPipelineStage.enabled[C]
 }
 
-object PipelineStage {
-  type PipelineStageContext = MacroContext { type PrefixType = PipelineStage }
-  def enabled(c: PipelineStageContext)(condition: c.Expr[Boolean]) =
+object RawPipelineStage {
+  type PipelineStageContext[C <: PipelineContext] = MacroContext { type PrefixType = RawPipelineStage[C] }
+  def enabled[C <: PipelineContext](c: PipelineStageContext[C])(condition: c.Expr[Boolean]) =
     c.universe.reify {
       if (condition.splice) c.prefix.splice else EmptyPipelineStage
     }
 }
 
-trait OptionalPipelineStage extends PipelineStage {
-  def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+trait OptionalPipelineStage[C <: PipelineContext] extends RawPipelineStage[C] {
+  def apply(context: C, commandPL: CPL, eventPL: EPL): Pipelines =
     if (enabled(context)) applyIfEnabled(context, commandPL, eventPL)
     else Pipelines(commandPL, eventPL)
 
-  def enabled(context: PipelineContext): Boolean
+  def enabled(context: C): Boolean
 
-  def applyIfEnabled(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines
+  def applyIfEnabled(context: C, commandPL: CPL, eventPL: EPL): Pipelines
 }
 
 object EmptyPipelineStage extends PipelineStage {
 
   def apply(ctx: PipelineContext, cpl: CPL, epl: EPL) = Pipelines(cpl, epl)
 
-  override def >> (right: PipelineStage) = right
+  override def >> [CC <: PipelineContext, R <: PipelineContext with CC](right: RawPipelineStage[CC]): RawPipelineStage[R] = right
 }

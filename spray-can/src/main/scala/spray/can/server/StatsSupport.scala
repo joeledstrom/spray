@@ -118,3 +118,15 @@ object StatsSupport {
         }
     }
 }
+
+case class Stats(
+  uptime: FiniteDuration,
+  totalRequests: Long,
+  openRequests: Long,
+  maxOpenRequests: Long,
+  totalConnections: Long,
+  openConnections: Long,
+  maxOpenConnections: Long,
+  requestTimeouts: Long,
+  idleTimeouts: Long
+)

@@ -16,10 +16,9 @@
 
 package spray.io
 
-import scala.concurrent.duration.{Duration, FiniteDuration}
-import akka.event.Logging
-import spray.util.ConnectionCloseReasons.IdleTimeout
-
+import scala.concurrent.duration.{ Duration, FiniteDuration }
+import akka.io.Tcp
+import System.{ currentTimeMillis ⇒ now }
 
 object ConnectionTimeouts {
 
@@ -28,34 +27,33 @@ object ConnectionTimeouts {
 
     new PipelineStage {
       def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines = new Pipelines {
-        val debug = TaggedLog(context, Logging.DebugLevel)
         var timeout = idleTimeout
-        var lastActivity = System.currentTimeMillis
+        var lastActivity = now
 
         val commandPipeline: CPL = {
-          case x: SetIdleTimeout =>
+          case x: Tcp.Write ⇒
+            commandPL(x)
+            lastActivity = now
+
+          case x: SetIdleTimeout ⇒
             timeout = x.timeout.toMillis
 
-          case x: IOConnection.Send =>
-            commandPL(x)
-            lastActivity = System.currentTimeMillis
-
-          case cmd => commandPL(cmd)
+          case cmd ⇒ commandPL(cmd)
         }
 
         val eventPipeline: EPL = {
-          case x: IOConnection.Received =>
-            lastActivity = System.currentTimeMillis
+          case x: Tcp.Received ⇒
+            lastActivity = now
             eventPL(x)
 
-          case TickGenerator.Tick =>
+          case tick@ TickGenerator.Tick ⇒
             if (timeout > 0 && (lastActivity + timeout < System.currentTimeMillis)) {
-              debug.log("Closing connection due to idle timeout...")
-              commandPL(IOConnection.Close(IdleTimeout))
+              context.log.debug("Closing connection due to idle timeout...")
+              commandPL(Tcp.Close)
             }
-            eventPL(TickGenerator.Tick)
+            eventPL(tick)
 
-          case ev => eventPL(ev)
+          case ev ⇒ eventPL(ev)
         }
       }
     }

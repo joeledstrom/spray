@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-package spray.testkit
+package spray.util.pimps
 
-import org.scalatest.exceptions.TestFailedException
-import org.scalatest.{ Suite, BeforeAndAfterAll }
+import com.typesafe.config.Config
+import scala.concurrent.duration.Duration
 
-trait ScalatestInterface extends TestFrameworkInterface with BeforeAndAfterAll {
-  this: Suite ⇒
+class PimpedConfig(underlying: Config) {
 
-  def failTest(msg: String) = throw new TestFailedException(msg, 11)
+  def getDuration(path: String) = underlying.getString(path) match {
+    case "infinite" ⇒ Duration.Undefined
+    case x => Duration(x)
+  }
 
-  override protected def afterAll() { cleanUp() }
 }

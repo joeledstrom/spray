@@ -23,15 +23,19 @@ import spray.can.{HttpEvent, HttpCommand}
 import spray.util.ConnectionCloseReasons._
 import spray.http._
 import spray.io._
+import akka.actor.ActorRef
 
 
 object ServerFrontend {
 
-  def apply(serverSettings: ServerSettings,
-            messageHandler: MessageHandler,
-            timeoutResponse: HttpRequest => HttpResponse): PipelineStage = {
-    new PipelineStage {
-      def apply(context: PipelineContext, commandPL: CPL, eventPL: EPL): Pipelines =
+  trait Context extends PipelineContext {
+    // the application-level request handler
+    def handler: ActorRef
+  }
+
+  def apply(serverSettings: ServerSettings): RawPipelineStage[Context] = {
+    new RawPipelineStage[Context] {
+      def apply(context: Context, commandPL: CPL, eventPL: EPL): Pipelines =
         new Pipelines with OpenRequestComponent {
           val debug = TaggedLog(context, Logging.DebugLevel)
           def warning = TaggedLog(context, Logging.WarningLevel)
