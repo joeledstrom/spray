@@ -88,6 +88,34 @@ object PipelineStage {
     c.universe.reify {
       if (condition.splice) c.prefix.splice else EmptyPipelineStage
     }
+  
+  def dynamic(initial: PipelineStage) =
+		new PipelineStage {
+			def apply(context: PipelineContext, cpl: CPL, epl: EPL) = {
+			
+				var pipelines: Pipelines = null
+
+				def attachBecomeHandler(stage: PipelineStage): Pipelines = stage(
+					context,
+      		commandPL = {
+      			case Become(replaceStage) =>
+      				pipelines = attachBecomeHandler(replaceStage)
+			 			case c =>
+			 				cpl(c)
+			 		},
+      		eventPL = epl
+      	)
+			
+				pipelines = attachBecomeHandler(initial)
+				
+				// Note: really need to close on pipelines
+	  		Pipelines(
+	  			commandPL = pipelines.commandPipeline(_),
+	  			eventPL = pipelines.eventPipeline(_)
+	  		)
+  		}
+		}
+  case class Become(stage: PipelineStage) extends Command
 }
 
 trait OptionalPipelineStage extends PipelineStage {
